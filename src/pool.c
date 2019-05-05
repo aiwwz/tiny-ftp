@@ -30,15 +30,15 @@ void Setsockopt(int sockfd, int level, int optname, const void *optval, socklen_
 	ERROR_CHECK(ret, -1, "setsockopt");
 }
 
-int Tcp_init(const char *ip, const char *port){
+int Tcp_init(struct in_addr sin_addr, unsigned short sin_port){
 	int sockfd;
 	sockfd = Socket(AF_INET, SOCK_STREAM, 0);
 	
 	struct sockaddr_in addr;
 	memset(&addr, 0, sizeof(struct sockaddr_in));
 	addr.sin_family = AF_INET;
-	addr.sin_port = htons(atoi(port));
-	addr.sin_addr.s_addr = inet_addr(ip);
+	addr.sin_port = htons(sin_port);
+	addr.sin_addr = sin_addr;
 	int reuse = 1;
 	Setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(int));
 	Bind(sockfd, (struct sockaddr*)&addr, sizeof(struct sockaddr));

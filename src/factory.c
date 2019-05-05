@@ -22,14 +22,14 @@ void* download_file(void *p){
     return NULL;
 }
 
-void init_factory(p_factory pfac, int thread_num, int max_elems){
-    pfac->p_threads = (pthread_t*)calloc(thread_num, sizeof(pthread_t));
+void init_factory(p_factory pfac, p_config pconf){
+    pfac->p_threads = (pthread_t*)calloc(pconf->thread_num, sizeof(pthread_t));
     if(pfac->p_threads == NULL){
         FatalError("Out of space!");
     }
-    pfac->thread_num = thread_num;
+    pfac->thread_num = pconf->thread_num;;
     pthread_cond_init(&pfac->cond, NULL);
-    pfac->task_queue = init_queue(max_elems);
+    pfac->task_queue = init_queue(pconf->queue_capacity);
     pfac->start_flag = 0;
 }
 

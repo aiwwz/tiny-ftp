@@ -26,7 +26,6 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 
-
 #define ARGS_CHECK(argc,val) {if(argc!=val) \
 	{printf("error args\n"); exit(-1);}}
 
@@ -57,7 +56,7 @@ void Bind(int sockfd, struct sockaddr *addr, int addrlen);
 void Listen(int sockfd, int backlog);
 int Accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 void Setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen);
-int Tcp_init(const char *ip, const char *port);
+int Tcp_init(struct in_addr sin_addr, unsigned short sin_port);
 void Socketpair(int, int, int, int*);
 
 
