@@ -1,7 +1,11 @@
 SRCS:=$(wildcard *.c)
-ELFS:=$(SRCS:%.c=%)
-all:$(ELFS)
-		@for i in $(ELFS);do gcc -o $${i} $${i}.c;done
+OBJS:=$(patsubst %.c,%.o,$(SRCS))
+ELF:=ftp_client
+CC:=gcc
+CFLAGS:=-g -Wall
+$(ELF):$(OBJS)
+	gcc $^ -o $@ -pthread -I /usr/include/mysql/ -lmysqlclient
+.PHONY:clean
 clean:
-		rm -rf $(ELFS)
+	rm -rf $(ELF) $(OBJS)
 
