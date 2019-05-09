@@ -34,7 +34,7 @@ p_queue init_queue(int max_elems){
     if(que == NULL){
         FatalError("Out of space!");
     }
-    que->array = (elem_t*)malloc(sizeof(elem_t) * max_elems);
+    que->array = (elem_t*)calloc(max_elems, sizeof(elem_t));
     if(que->array == NULL){
         FatalError("Out of space!");
     }

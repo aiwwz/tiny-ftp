@@ -1,6 +1,8 @@
 #ifndef POOL_H
 #define POOL_H
 
+#include <ctype.h>
+#include <assert.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>

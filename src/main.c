@@ -16,9 +16,12 @@ int main(int argc, char *argv[]){
 
     p_queue task_queue = fac.task_queue;
     elem_t new_elem;
+    new_elem.sin_addr.s_addr = conf.sin_addr.s_addr; //为pasv模式提供本机ip
+    socklen_t addrlen = sizeof(new_elem.client_addr);
+
     while(1){
-        newfd = Accept(listenfd, NULL, NULL);
-        printf("Yes! newfd=%d is coming!\n", newfd);
+        newfd = Accept(listenfd, (struct sockaddr*)&new_elem.client_addr, &addrlen);
+        printf("new_client! ip:%s, port:%d\n", inet_ntoa(new_elem.client_addr.sin_addr), ntohs(new_elem.client_addr.sin_port));
         new_elem.newfd = newfd;
         pthread_mutex_lock(&task_queue->mutex);
         enqueue(task_queue, &new_elem);

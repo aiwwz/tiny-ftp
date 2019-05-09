@@ -38,7 +38,7 @@ int Tcp_init(struct in_addr sin_addr, unsigned short sin_port){
 	memset(&addr, 0, sizeof(struct sockaddr_in));
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(sin_port);
-	addr.sin_addr = sin_addr;
+	addr.sin_addr.s_addr = sin_addr.s_addr;
 	int reuse = 1;
 	Setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(int));
 	Bind(sockfd, (struct sockaddr*)&addr, sizeof(struct sockaddr));
@@ -103,7 +103,9 @@ ssize_t Send(int sockfd, const void *buf, size_t len, int flags){
 
 ssize_t Recv(int sockfd, void *buf, size_t len, int flags){
 	ssize_t ret = recv(sockfd, buf, len, flags);
-	ERROR_CHECK(ret, -1, "recv");
+    if(ret == -1){
+        perror("recv");
+    }
 	return ret;
 }
 

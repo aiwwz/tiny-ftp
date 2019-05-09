@@ -8,7 +8,7 @@
 #include <arpa/inet.h>
 
 /* 常用宏函数 */
-#define IsLetter(ch)    (ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z')
+#define IsLetter(ch)    ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z'))
 #define IsDigit(ch)     (ch >= '0' && ch <= '9')
 #define IsDot(ch)       (ch == '.')
 #define IsUnderline(ch) (ch == '_')

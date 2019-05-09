@@ -8,11 +8,16 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <pthread.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 #define MIN_QUEUE_SIZE 3 //队列最小容量
 
 typedef struct{
     int newfd;
+    struct sockaddr_in client_addr;
+    struct in_addr sin_addr; //主机ip地址
 }elem_t; //elem_t未来可扩充
 
 typedef struct queue_record{

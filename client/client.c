@@ -83,7 +83,7 @@ int cmd_open(const char *ip_addr, const char *port){
 
 /* 进入对应目录 */
 void cmd_cd(const char *path){
-    client_send_cmd("CWD", path);
+    client_send_cmd("C", path);
     client_recv_reply();
 }
 
@@ -110,13 +110,45 @@ void cmd_pwd(){
 
 /* 上传 */
 void cmd_put(const char *filename){
+    int fd = open(filename, O_RDONLY, 0664);
+    if(fd == -1){
+        printf("local: %s:", filename);
+        fflush(stdout);
+        perror("");
+        return;
+    }
+    struct stat st;
+    fstat(fd, &st);
+    char *p_file = (char*)mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    ERROR_CHECK(p_file, (char*)-1, "mmap");
+    
+    int data_port = cmd_pasv();
+    data_sockfd = client_connect("192.168.3.6", data_port);
 
+    client_send_cmd("STOR", filename);
+    int reply_code = client_recv_reply();
+    if(reply_code != 150){
+        //文件名非法
+        return;
+    }
+    
+    int ret;
+    long curr_size = 0;
+    while(curr_size < st.st_size){
+        ret = send(data_sockfd, p_file, st.st_size-curr_size, 0); 
+        ERROR_CHECK(ret, -1, "send");
+        curr_size += ret;
+        printf("curr_size=%ld\n", curr_size);
+    }
+    close(data_sockfd);
+    client_recv_reply();
 }
 
 /* 下载 */
 int get_file_size(long *p_filesize){
     char buf[128] = {0};
     recv(control_sockfd, buf, sizeof(buf), 0);
+    printf("%s", buf);
     int reply_code;
     sscanf(buf, "%d", &reply_code);
     if(reply_code == 213){
@@ -128,6 +160,13 @@ int get_file_size(long *p_filesize){
     return reply_code;
 }
 void cmd_get(const char *filename){
+    int fd = open(filename, O_CREAT|O_WRONLY|O_TRUNC, 0664);
+    if(fd == -1){
+        printf("local: %s:", filename);
+        fflush(stdout);
+        perror("");
+        return;
+    }
     int data_port = cmd_pasv();
     data_sockfd = client_connect("192.168.3.6", data_port);
 
@@ -135,7 +174,6 @@ void cmd_get(const char *filename){
     int reply_code;
     client_send_cmd("SIZE", filename);
     reply_code = get_file_size(&filesize);    
-    printf("reply_code=%d, filesize=%ld\n", reply_code, filesize);
     if(reply_code != 213){
         //文件不存在
         return;
@@ -144,8 +182,7 @@ void cmd_get(const char *filename){
     client_send_cmd("RETR", filename);
     client_recv_reply();
     char buf[1024] = {0};
-    int fd, ret, curr_size = 0;
-    fd= open(filename, O_CREAT|O_WRONLY|O_TRUNC, 0664);
+    int ret, curr_size = 0;
     while(curr_size < filesize){
         ret = recv(data_sockfd, buf, sizeof(buf), 0);
         if(ret == -1){
@@ -266,11 +303,12 @@ int client_connect(const char *ip_addr, int port){
     serv_addr.sin_port = htons(port);
     inet_aton(ip_addr, &serv_addr.sin_addr);
     Connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+    printf("Connect to %s:%d\n", ip_addr, port);
 
     return sockfd;
 }
 
-
+/* 切分参数 */
 char** split_cmds(char *buf){
     if(buf == NULL){
         return NULL;

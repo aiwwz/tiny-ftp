@@ -3,6 +3,7 @@
 #include "head.h" 
 #include "queue.h"
 #include "conf.h"
+#include "user_info.h"
 
 typedef struct{
     pthread_t *p_threads; //存储线程
@@ -14,5 +15,6 @@ typedef struct{
 
 void init_factory(p_factory pfac, p_config pconf);
 void start_factory(p_factory pfac);
+void* handle_client_commands(void *p);
 
 #endif /*__FACTORY_H__*/
