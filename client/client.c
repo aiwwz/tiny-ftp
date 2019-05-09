@@ -68,6 +68,10 @@ int cmd_open(const char *ip_addr, const char *port){
     if(reply_code == -1){
         return -1;
     }
+    //测试区开始
+    //client_send_cmd("PASS", NULL);
+
+    //测试区结束
 
     passwd = getpass("password:");
     getchar(); //标准输入还有一个'\n'
