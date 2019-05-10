@@ -56,6 +56,10 @@ void free_cmds(char **cmds){
     free(cmds);
 }
 
+void free_path(char **dirs){
+    free_cmds(dirs);
+}
+
 void send_welcome_message(int sockfd){
     char buf[1024] = {0};
     sprintf(buf, "220-tiny_ftp server version 0.01 beta\r\n");
@@ -76,8 +80,8 @@ int server_recv_cmd(elem_t *task, char ***cmds){ //注意这里的cmds是三级�
         return 0;
     }
 
-    printf("\033[34m%s\033[0m", buf);
     *cmds = split_cmds(buf);
+    printf("\033[34m%s\033[0m", buf);
     return ret;
 }
 
@@ -114,10 +118,14 @@ int sizeof_cmd(char **cmds){
     return size;
 }
 
+int sizeof_dir(char **dirs){
+    return sizeof_cmd(dirs);
+}
+
 /* 为PASV模式提供新端口 */
 short get_data_port(){
     //待实现:由配置文件指定可用端口范围
-    return 3000;
+    return 5000;
 }
 
 /************************************** 
@@ -148,15 +156,100 @@ char *str_replace(char *str, char ch1, char ch2){
     return tmp;
 }
 
+
+/* 切分路径为目录名 */
+char** split_path(const char *buf){
+    if(buf == NULL){
+        return NULL;
+    }
+    
+    int dirnum = 6; //初始支持5级目录(另外1个为末尾的NULL)
+    char **dirs = (char**)calloc(dirnum,  sizeof(char*));
+
+    const char *pch = buf;
+    const char *start;
+    int curr_dirnum = 0; //当前目录级数
+    int len;
+
+    while(1){
+        //跳过空格和'/'
+        while(*pch == '/' || *pch == ' ' || *pch == '\t' || *pch == '\r' || *pch == '\n'){
+            pch++;
+        }
+        if(*pch == '\0'){
+            break;
+        }
+
+        if(curr_dirnum + 1 >= dirnum){
+            //空间不足,扩大为原来的两倍
+            dirs = (char**)realloc(dirs, 2 * dirnum * sizeof(char*));
+            dirnum *= 2;
+        }
+
+        len = 0;
+        start = pch;
+        while(*pch != '/' && *pch != ' ' && *pch != '\t' && *pch != '\r' && *pch != '\n' && *pch != '\0'){
+            len++;
+            pch++;
+        }
+        dirs[curr_dirnum] = (char*)calloc(len + 1, sizeof(char));
+        strncpy(dirs[curr_dirnum], start, len);
+        dirs[curr_dirnum][len] = '\0'; //末尾加'\0'
+        curr_dirnum++;
+    }
+    dirs[curr_dirnum] = NULL; //命令参数表以NULL结尾
+    return dirs;
+}
+
+/* 查看目录dirs是否在code为dir_code的目录下 */
+int handle_cwd(int dir_code, char **path){
+    if(path == NULL){
+        return -1;
+    }
+    int tmp_code = dir_code;
+    int ret_code;
+    char **p_dir = path;
+    int flag = 1; //标志:是否搜索成功
+    while(*p_dir != NULL){
+        ret_code = db_find_dir(tmp_code, *p_dir); //在数据库中搜索
+        if(ret_code != -1){ //该目录存在
+            tmp_code = ret_code; //进入该目录
+        }
+        else{
+            flag = 0; //没找到该目录
+            break;
+        }
+        p_dir++;
+    }
+    if(flag == 1){
+        return tmp_code;
+    }
+    else{
+        return -1;
+    }
+}
+
 void ftp_server(elem_t *task){
-    char username[128] = {0};
-    char info[512] = {0};
-    char pwd[1024] = "/";
+    //测试区开始
+    /*while(1){
+        int i;
+        scanf("%d",  &i);
+        char buf[100] = {0};
+        db_get_pwd(i, buf);
+        printf("%s\n", buf);
+    }*/
+    //测试区结束
+    char info[512] = {0}; //存放响应信息
+    char pwd[1024] = "/"; //工作目录
+    int  pwd_code = 0;    //工作目录的code
+    user_info_t user;     //当前用户信息
+    file_info_t file;     //存储文件信息
 
     printf("Connected, sending welcome message...\n");
     send_welcome_message(task->newfd); //发送欢迎信息
 
     char **cmds = NULL;      //客户端发来的参数列表
+    char **dirs = NULL;      //保存分隔后的目录名
     int logged = LOGGED_OUT; //登录状态
     int data_sockfd = -1;    //PASV模式的数据端口
     int ret = 0;
@@ -172,8 +265,8 @@ void ftp_server(elem_t *task){
         }
         if(logged == LOGGED_ON){
             if(ftp_strcmp(cmds[0], "USER") == 0){ //切换用户
-                strcpy(username, cmds[1]); //获取用户名
-                sprintf(info, "Password required for %s", username);
+                strcpy(user.username, cmds[1]); //获取用户名
+                sprintf(info, "Password required for %s", user.username);
                 server_send_reply(task, 331, info); //请求客户端发送密码
                 server_recv_cmd(task, &cmds);
                 if(strcmp(cmds[0], "PASS") == 0){
@@ -181,30 +274,82 @@ void ftp_server(elem_t *task){
                         server_send_reply(task, 530, "Login or password incorrect!");
                         break;
                     }
-                   if(ftp_strcmp(cmds[1], "123") == 0){
-                        //登录成功！
-                        server_send_reply(task, 230, "Logged on");
+                    if(db_get_user(&user) == -1){ //用户不存在
+                        server_send_reply(task, 530, "Login or password incorrect!");
                         logged = LOGGED_ON;
                     }
-                    else{
-                        //登录失败
-                        server_send_reply(task, 530, "Login or password incorrect!");
-                        logged = LOGGED_OUT;
+                    else{ //用户存在,验证密码
+                        printf("username:%s, salt:%s, passwd:%s\n", user.username, user.salt, user.passwd);
+                        if(ftp_strcmp(cmds[1], user.passwd) == 0){
+                            //登录成功！
+                            server_send_reply(task, 230, "Logged on");
+                            logged = LOGGED_ON;
+                        }
+                        else{
+                            //密码错误,登录失败
+                            server_send_reply(task, 530, "Login or password incorrect!");
+                            logged = LOGGED_OUT;
+                        }
+
                     }
                     continue;
                 }
             }
             else if(ftp_strcmp(cmds[0], "CWD") == 0){
-                
+                if(sizeof_cmd(cmds) == 1){ //空CWD参数
+                    sprintf(info, "Broken client detected, missing argument to CWD. \"%s\" is current directory.", pwd);
+                    server_send_reply(task, 150, info);
+                }
+                else{ //参数合法
+                    dirs = split_path(cmds[1]);
+                    
+                    if(cmds[1][0] == '/'){ //绝对路径
+                        ret = handle_cwd(ROOT_DIR_CODE, dirs); //从根目录开始
+                    }
+                    else{ //相对路径
+                        if(strcmp(dirs[0], ".") == 0){
+                            ret = handle_cwd(pwd_code, dirs+1);
+                        }
+                        else if(strcmp(dirs[0], "..") == 0){
+                            if(pwd_code == 0){ //根目录没有父目录
+                                ret = handle_cwd(pwd_code, dirs+1);
+                            }
+                            else{ //非根目录有父目录
+                                bzero(&file, sizeof(file));
+                                db_get_file(pwd_code, &file);
+                                ret = handle_cwd(file.precode, dirs+1); //从父目录开始找
+                            }
+                        }
+                        else{ //普通相对路径
+                            ret = handle_cwd(pwd_code, dirs);
+                        }
+                    }
+                    if(ret != -1){ //找到该目录
+                        pwd_code = ret;             //改变工作目录code
+                        db_get_pwd(pwd_code, pwd); //改变工作目录
+                        sprintf(info, "CWD successful. \"%s\" is current directory.", pwd);
+                        server_send_reply(task, 250, info);
+                    }
+                    else{ //未找到该目录
+                        sprintf(info, "CWD failed. \"%s\": directory not found.", cmds[1]);
+                        server_send_reply(task, 550, info);
+                    }
+                    free_path(dirs); //不要忘记释放内存!!!
+                }
             }
             else if(ftp_strcmp(cmds[0], "LIST") == 0){
-
+                
             }
             else if(ftp_strcmp(cmds[0], "DELE") == 0){
 
             }
             else if(ftp_strcmp(cmds[0], "MKD") == 0){
-
+                if(sizeof_cmd(cmds) < 2){ //mkdir没带参数
+                    server_send_reply(task, 550, "Syntax error.");
+                }
+                else{
+                    db_mkdir(pwd_code, cmds[1]);
+                }
             }
             else if(ftp_strcmp(cmds[0], "RMD") == 0){
 
@@ -213,22 +358,24 @@ void ftp_server(elem_t *task){
 
             }
             else if(ftp_strcmp(cmds[0], "QUIT") == 0){
-
+                server_send_reply(task, 221, "Goodbye!");
+                break;
             }
             else if(ftp_strcmp(cmds[0], "PWD") == 0){
                 sprintf(info, "\"%s\" is current directory.", pwd);
                 server_send_reply(task, 257, info);
             }
             else if(ftp_strcmp(cmds[0], "TYPE") == 0){
+                //该指令待完善,当前只是对客户端的欺骗
                 if(sizeof_cmd(cmds) < 2){
                     server_send_reply(task, 503, "Syntax error, nead a parameter:A/B");
                     break;
                 }
-                else if(ftp_strcmp(cmds[1], "A")){ //ASCII模式传输
+                else if(ftp_strcmp(cmds[1], "A") == 0){ //ASCII模式传输
                     //trans_mode = ASCII_MODE;
                     server_send_reply(task, 200, "Type set to A.");
                 }
-                else if(ftp_strcmp(cmds[1], "B")){ //Binary模式传输
+                else if(ftp_strcmp(cmds[1], "B") == 0){ //Binary模式传输
                     //trans_mode = BINARY_MODE;
                     server_send_reply(task, 200, "Type set to B.");
                 }
@@ -253,8 +400,8 @@ void ftp_server(elem_t *task){
         }
         else{ //尚未登录
             if(ftp_strcmp(cmds[0], "USER") == 0){ //未登录状态只能请求该命令
-                strcpy(username, cmds[1]); //获取用户名
-                sprintf(info, "Password required for %s", username);
+                strcpy(user.username, cmds[1]); //获取用户名
+                sprintf(info, "Password required for %s", user.username);
                 server_send_reply(task, 331, info); //请求客户端发送密码
                 server_recv_cmd(task, &cmds);
                 if(strcmp(cmds[0], "PASS") == 0){
@@ -262,15 +409,23 @@ void ftp_server(elem_t *task){
                         server_send_reply(task, 530, "Login or password incorrect!");
                         break;
                     }
-                   if(ftp_strcmp(cmds[1], "123") == 0){
-                        //登录成功！
-                        server_send_reply(task, 230, "Logged on");
+                    if(db_get_user(&user) == -1){ //用户不存在
+                        server_send_reply(task, 530, "Login or password incorrect!");
                         logged = LOGGED_ON;
                     }
-                    else{
-                        //登录失败
-                        server_send_reply(task, 530, "Login or password incorrect!");
-                        logged = LOGGED_OUT;
+                    else{ //用户存在,验证密码
+                        printf("username:%s, salt:%s, passwd:%s\n", user.username, user.salt, user.passwd);
+                        if(ftp_strcmp(cmds[1], user.passwd) == 0){
+                            //登录成功！
+                            server_send_reply(task, 230, "Logged on");
+                            logged = LOGGED_ON;
+                        }
+                        else{
+                            //密码错误,登录失败
+                            server_send_reply(task, 530, "Login or password incorrect!");
+                            logged = LOGGED_OUT;
+                        }
+
                     }
                     continue;
                 }

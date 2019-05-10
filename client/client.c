@@ -69,7 +69,7 @@ int cmd_open(const char *ip_addr, const char *port){
         return -1;
     }
     //测试区开始
-    //client_send_cmd("PASS", NULL);
+    client_send_cmd("MKD", NULL);
 
     //测试区结束
 
@@ -81,13 +81,16 @@ int cmd_open(const char *ip_addr, const char *port){
         return -1;
     }
 
+    //测试
+    client_send_cmd("CWD", "dir/");
+
     return 0;
 }
 
 
 /* 进入对应目录 */
 void cmd_cd(const char *path){
-    client_send_cmd("C", path);
+    client_send_cmd("CWD", path);
     client_recv_reply();
 }
 
@@ -377,6 +380,17 @@ void print_cmds(char **cmds){
     printf("\n");
 }
 
+int sizeof_cmd(char **cmds){
+    if(cmds == NULL){
+        return 0;
+    }
+    int size = 0;
+    while(cmds[size] != NULL){
+        size++;
+    }
+    return size;
+}
+
 void ftp_client(){
     char buf[512];
     char **cmds = NULL;
@@ -405,7 +419,13 @@ void ftp_client(){
             cmd_open("192.168.3.6", "21");
         }
         else if(strcmp(cmds[0], "cd") == 0){
-            cmd_cd(cmds[1]);
+            //bug:若cmds[1]==NULL,将崩溃
+            if(sizeof_cmd(cmds) == 1){
+                cmd_cd("/");
+            }
+            else{
+                cmd_cd(cmds[1]);
+            }
         }
         else if(strcmp(cmds[0], "ls") == 0){
             cmd_ls(cmds[1]);
