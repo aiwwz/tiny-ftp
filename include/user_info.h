@@ -25,8 +25,14 @@ typedef struct{
 
 int db_get_user(p_user_info p_info);
 int db_find_dir(int dir_code, const char *dir_name);
+int db_find_file(const char *username, int dir_code, const char *filename);
 int db_get_file(int file_code, p_file_info p_info);
 int db_get_pwd(int dir_code, char *buf);
+int db_create_dir(const char *username, int dir_code, const char *dir_name);
+int db_dir_empty(const char *username, int dir_code);
+int db_remove_dir(const char *username, int dir_code);
+int db_remove_file(const char *username, int file_code);
+int db_list_info(const char *username, int dir_code, file_info_t **pp_info);
 
 
 #endif /* __USER_INFO_H__ */

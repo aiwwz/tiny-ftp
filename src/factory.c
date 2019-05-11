@@ -7,7 +7,7 @@ char** split_cmds(char *buf){
     if(buf == NULL){
         return NULL;
     }
-    
+
     int argnum = 4; //默认只支持3个参数(另外1个为末尾的NULL)
     char **cmds = (char**)calloc(argnum,  sizeof(char*));
 
@@ -72,7 +72,7 @@ void send_welcome_message(int sockfd){
 
 int server_recv_cmd(elem_t *task, char ***cmds){ //注意这里的cmds是三级指针
     free_cmds(*cmds); //每次使用之前必须释放上一次申请的空间
-    
+
     char buf[1024] = {0};
     int ret = recv(task->newfd, buf, sizeof(buf), 0);
     ERROR_CHECK(ret, -1, "recv");
@@ -143,7 +143,7 @@ int ftp_strcmp(const char *str1, const char *str2){
     return (*str1-*str2);
 }
 
- /* 将字符串str中所有的字符ch1替换为ch2 */ 
+/* 将字符串str中所有的字符ch1替换为ch2 */ 
 char *str_replace(char *str, char ch1, char ch2){
     assert(str != NULL);
     char *tmp = str;
@@ -162,7 +162,7 @@ char** split_path(const char *buf){
     if(buf == NULL){
         return NULL;
     }
-    
+
     int dirnum = 6; //初始支持5级目录(另外1个为末尾的NULL)
     char **dirs = (char**)calloc(dirnum,  sizeof(char*));
 
@@ -202,13 +202,21 @@ char** split_path(const char *buf){
 }
 
 /* 查看目录dirs是否在code为dir_code的目录下 */
-int handle_cwd(int dir_code, char **path){
-    if(path == NULL){
+int handle_cwd(int dir_code, char **dirs){
+    if(dirs == NULL){
         return -1;
+    }
+    file_info_t file;
+    int ret;
+    if(dir_code != 0){ //若不是根目录, 则需检查该目录是否存在
+        ret = db_get_file(dir_code, &file);
+        if(ret == -1 || !S_ISDIR(file.st_mode)){ //目录不存在
+            return -1;
+        }
     }
     int tmp_code = dir_code;
     int ret_code;
-    char **p_dir = path;
+    char **p_dir = dirs;
     int flag = 1; //标志:是否搜索成功
     while(*p_dir != NULL){
         ret_code = db_find_dir(tmp_code, *p_dir); //在数据库中搜索
@@ -229,15 +237,200 @@ int handle_cwd(int dir_code, char **path){
     }
 }
 
+/*************************************************
+ *   功能: 从code为dir_code的目录开始, 创建目录dirs 
+ *     例: dirs: dir1/dir2/movie
+ *         要求dir1/dir2已存在,最后创建movie目录 
+ * 返回值: 0 -- 创建成功
+ *        -1 -- 中间目录不存在
+ *        -2 -- 目标目录已存在
+ *        -3 -- 非法的目录名
+ *************************************************/
+int handle_mkd(const char *username, int dir_code, char **dirs){
+    int ret = 0;
+    int code = dir_code;
+    char **p_dir = dirs;
+    if(*p_dir == NULL){ //非法的目录名
+        return -3;
+    }
+    //判断中间目录是否都存在
+    while(*(p_dir+1) != NULL){
+        ret = db_find_dir(code, *p_dir);
+        if(ret == -1){ //中间目录不存在
+            return -1;
+        }
+        code = ret; //进入下一级目录继续查找
+        p_dir++;
+    }
+    printf("code:%d, name:%s\n", code, *p_dir);
+    ret = db_create_dir(username, code, *p_dir); //在最后一级中间目录中创建目标目录
+    if(ret == 0){ //创建成功
+        return 0;
+    }
+    else{
+        return -2; //目标目录已存在
+    }
+}
+
+/***************************************************
+ *   功能: 从code为dir_code的目录开始, 删除空目录dirs 
+ *     例: dirs: dir1/dir2/movie
+ *         要求dir1/dir2/movie存在,且movie为空目录,
+ *         最后删除movie目录 
+ * 返回值: 0 -- 删除成功
+ *        -1 -- 目录不存在
+ *        -2 -- 目标目录非空
+ *        -3 -- 非法的目录名
+ ****************************************************/
+int handle_rmd(const char *username, int dir_code, char **dirs){
+    int ret = 0;
+    int code = dir_code;
+    char **p_dir = dirs;
+    if(*p_dir == NULL){ //非法的目录名
+        return -3;
+    }
+    //判断所有目录是否都存在
+    while(*p_dir != NULL){
+        ret = db_find_dir(code, *p_dir);
+        if(ret == -1){ //目录不存在
+            return -1;
+        }
+        code = ret; //进入下一级目录继续查找
+        p_dir++;
+    }
+    //判断目标目录是否为空
+    ret = db_dir_empty(username, code);
+    if(ret == 1){ //目录为空可以删除
+        db_remove_dir(username, code);
+        return 0;
+    }
+    else{ //目录非空, 不能删除
+        return -2;
+    }
+}
+
+
+/*****************************************************
+ *   功能: 从code为dir_code的目录开始, 删除普通文件dirs 
+ *     例: dirs: dir1/dir2/file
+ *         要求dir1/dir2/file存在,且file为普通文件
+ *         最后删除file文件 
+ * 返回值: 0 -- 删除成功
+ *        -1 -- 删除失败:文件不存在
+ *******************************************************/
+int handle_dele(const char *username, int dir_code, char **dirs){
+    int ret = 0;
+    int code = dir_code;
+    char **p_dir = dirs;
+    file_info_t file;
+    if(*p_dir == NULL){ //非法的路径
+        return -1;
+    }
+    //判断所有中间目录是否都存在
+    while(*(p_dir+1) != NULL){
+        ret = db_find_dir(code, *p_dir);
+        if(ret == -1){ //目录不存在
+            return -1;
+        }
+        code = ret; //进入下一级目录继续查找
+        p_dir++;
+    }
+
+    ret = db_find_file(username, code, *p_dir);
+    if(ret == -1){ //文件不存在
+        return -1;
+    }
+    else{ //文件存在
+        db_get_file(ret, &file);
+        if(S_ISREG(file.st_mode)){ //是普通文件, 删除之
+            printf("st_mode:%d\n", file.st_mode);
+            db_remove_file(username, ret);
+            return 0;
+        }
+        else{
+            return -1; //目录文件
+        }
+    }
+}
+
+
+void tran_list_info(int sockfd, p_file_info list_info){
+    if(list_info == NULL){
+        close(sockfd);
+        return;
+    }
+    p_file_info p_info = list_info;
+    char buf[256] = {0};
+    const char *dir = "drwxr-xr-x";
+    const char *reg = "-rw-r--r--";
+
+    while(p_info->code != 0){
+        sprintf(buf, "%s 1 ftp ftp %12ld May 05 13:14 %s\r\n", S_ISDIR(p_info->st_mode)?dir:reg, p_info->st_size, p_info->filename);
+        Send(sockfd, buf, strlen(buf), 0);
+
+        p_info++;
+    }
+
+    free(list_info);
+    close(sockfd);
+}
+
+
+/********************************************************
+ *   功能: 从code为dir_code的目录开始, 打印目录dirs的信息 
+ *     例: dirs: dir1/dir2/file, 要求dir1/dir2/file存在
+ *         若file是目录     -- 打印该目录下的所有文件的信息
+ *         若file是普通文件 -- 打印该文件的信息
+ * 返回值: 0 -- 打印成功
+ *        -1 -- 失败:目录不存在
+ *********************************************************/
+int handle_list(int data_sockfd, const char *username, int dir_code, char **dirs){
+    int ret = 0;
+    int code = dir_code;
+    char **p_dir = dirs;
+    file_info_t *list_info = NULL;
+    if(dirs == NULL){ //打印当前目录
+        db_list_info(username, dir_code, &list_info);
+    }   
+    else{ //打印指定目录
+        while(*(p_dir+1) != NULL){ //判断所有中间目录是否都存在
+            ret = db_find_dir(code, *p_dir);
+            if(ret == -1){ //目录不存在
+                close(data_sockfd);
+                return -1;
+            }
+            code = ret; //进入下一级目录继续查找
+            p_dir++;
+        }
+        //从倒数第二级目录获取目标文件信息
+        printf("code:%d, dir:%s\n", code, *p_dir);
+        code = db_find_file(username, code, *p_dir);
+        if(code == -1){ //不存在
+            close(data_sockfd);
+            return -1;
+        }
+        else{
+            db_list_info(username, code, &list_info);
+        }
+    }
+    tran_list_info(data_sockfd, list_info);
+    return 0;
+}
+
+
 void ftp_server(elem_t *task){
     //测试区开始
     /*while(1){
-        int i;
-        scanf("%d",  &i);
-        char buf[100] = {0};
-        db_get_pwd(i, buf);
-        printf("%s\n", buf);
-    }*/
+      int i;
+      int r;
+      file_info_t *list_info = NULL;
+      scanf("%d", &i);
+      r = db_list_info("wzj", i, &list_info);
+      printf("ret:%d\n", r);
+      if(r == 0){
+      tran_list_info(0, list_info);
+      }
+      }*/
     //测试区结束
     char info[512] = {0}; //存放响应信息
     char pwd[1024] = "/"; //工作目录
@@ -251,7 +444,7 @@ void ftp_server(elem_t *task){
     char **cmds = NULL;      //客户端发来的参数列表
     char **dirs = NULL;      //保存分隔后的目录名
     int logged = LOGGED_OUT; //登录状态
-    int data_sockfd = -1;    //PASV模式的数据端口
+    int listen_sockfd, data_sockfd = -1;    //PASV模式的数据端口
     int ret = 0;
     while(1){
         ret = server_recv_cmd(task, &cmds);    
@@ -296,13 +489,13 @@ void ftp_server(elem_t *task){
                 }
             }
             else if(ftp_strcmp(cmds[0], "CWD") == 0){
-                if(sizeof_cmd(cmds) == 1){ //空CWD参数
+                if(sizeof_cmd(cmds) == 1){ //cd未带参数
                     sprintf(info, "Broken client detected, missing argument to CWD. \"%s\" is current directory.", pwd);
                     server_send_reply(task, 150, info);
                 }
                 else{ //参数合法
                     dirs = split_path(cmds[1]);
-                    
+
                     if(cmds[1][0] == '/'){ //绝对路径
                         ret = handle_cwd(ROOT_DIR_CODE, dirs); //从根目录开始
                     }
@@ -311,13 +504,17 @@ void ftp_server(elem_t *task){
                             ret = handle_cwd(pwd_code, dirs+1);
                         }
                         else if(strcmp(dirs[0], "..") == 0){
-                            if(pwd_code == 0){ //根目录没有父目录
+                            if(pwd_code == 0){ //根目录没有上一级目录
                                 ret = handle_cwd(pwd_code, dirs+1);
                             }
                             else{ //非根目录有父目录
                                 bzero(&file, sizeof(file));
-                                db_get_file(pwd_code, &file);
-                                ret = handle_cwd(file.precode, dirs+1); //从父目录开始找
+                                if(db_get_file(pwd_code, &file) == 0){ //存在
+                                    ret = handle_cwd(file.precode, dirs+1); //从父目录开始找
+                                }
+                                else{
+                                    ret  = -1;
+                                }
                             }
                         }
                         else{ //普通相对路径
@@ -326,6 +523,7 @@ void ftp_server(elem_t *task){
                     }
                     if(ret != -1){ //找到该目录
                         pwd_code = ret;             //改变工作目录code
+                        printf("pwd_code:%d\n", pwd_code);
                         db_get_pwd(pwd_code, pwd); //改变工作目录
                         sprintf(info, "CWD successful. \"%s\" is current directory.", pwd);
                         server_send_reply(task, 250, info);
@@ -338,24 +536,250 @@ void ftp_server(elem_t *task){
                 }
             }
             else if(ftp_strcmp(cmds[0], "LIST") == 0){
-                
-            }
-            else if(ftp_strcmp(cmds[0], "DELE") == 0){
+                if(data_sockfd == -1){ //尚未建立数据连接
+                    server_send_reply(task, 503, "Bad sequence of commands.");
+                    continue;
+                }
+                else{
+                    sprintf(info, "150 Opening data channel for directory listing of \"%s\"", sizeof_cmd(cmds)>1?cmds[1]:pwd);
+                    server_send_reply(task, 150, info);
+                }
 
+                if(sizeof_cmd(cmds) == 1){ //ls当前目录
+                    printf("当前路径!\n");
+                    ret = handle_list(data_sockfd, user.username, pwd_code, NULL);
+                }
+                else{
+                    dirs = split_path(cmds[1]);
+                    if(cmds[1][0] == '/'){ //绝对路径
+                        printf("绝对路径!\n");
+                        ret = handle_list(data_sockfd, user.username, ROOT_DIR_CODE, dirs);
+                    }
+                    else{ //相对路径
+                        if(strcmp(dirs[0], ".") == 0){
+                            printf("相对路径:'.'\n");
+                            ret = handle_list(data_sockfd, user.username, pwd_code, dirs+1);
+                        }
+                        else if(strcmp(dirs[0], "..") == 0){
+                            printf("相对路径:'..'\n");
+                            if(pwd_code == 0){ //根目录没有上一级目录
+                                ret = handle_list(data_sockfd, user.username, pwd_code, dirs+1);
+                            }
+                            else{ //从上一级目录开始
+                                db_get_file(pwd_code, &file);
+                                ret = handle_list(data_sockfd, user.username, file.precode, dirs+1);
+                            }
+                        }
+                        else{ //普通相对路径
+                            printf("普通相对路径\n");
+                            ret = handle_list(data_sockfd, user.username, pwd_code, dirs);
+                        }
+                    }
+                    free_path(dirs); //不要忘记释放内存!!!
+                }
+
+                if(ret == 0){ //打印成功
+                    if(cmds[1] == NULL){ //打印的是当前路径
+                        sprintf(info, "Successfully transferred \"%s\"", pwd);
+                    }
+                    else{ //打印的是指定路径
+                        sprintf(info, "Successfully transferred \"%s\"", cmds[1]);
+                    }
+                    server_send_reply(task, 226, info);
+                }else{ //打印失败
+                    server_send_reply(task, 550, "Directory not found.");
+                }
+                close(data_sockfd);
+                close(listen_sockfd);
+                data_sockfd = -1;
+                printf("close sock!\n");
+            }
+            else if(ftp_strcmp(cmds[0], "RETR") == 0){
+                if(sizeof_cmd(cmds) == 1){ //get未带参数
+                    server_send_reply(task, 550, "Syntax error.");
+                    continue;
+                }
+
+                if(data_sockfd == -1){ //尚未建立数据连接
+                    server_send_reply(task, 503, "Bad sequence of commands.");
+                    continue;
+                }
+                else{
+                    sprintf(info, "150 Opening data channel for file download from server of \"%s\"", sizeof_cmd(cmds)>1?cmds[1]:pwd);
+                    server_send_reply(task, 150, info);
+                }
+
+                dirs = split_path(cmds[1]);
+                if(cmds[1][0] == '/'){ //绝对路径
+                    printf("绝对路径!\n");
+                    ret = handle_retr(data_sockfd, user.username, ROOT_DIR_CODE, dirs);
+                }
+                else{ //相对路径
+                    if(strcmp(dirs[0], ".") == 0){
+                        printf("相对路径:'.'\n");
+                        ret = handle_retr(data_sockfd, user.username, pwd_code, dirs+1);
+                    }
+                    else if(strcmp(dirs[0], "..") == 0){
+                        printf("相对路径:'..'\n");
+                        if(pwd_code == 0){ //根目录没有上一级目录
+                            ret = handle_retr(data_sockfd, user.username, pwd_code, dirs+1);
+                        }
+                        else{ //从上一级目录开始
+                            db_get_file(pwd_code, &file);
+                            ret = handle_retr(data_sockfd, user.username, file.precode, dirs+1);
+                        }
+                    }
+                    else{ //普通相对路径
+                        printf("普通相对路径\n");
+                        ret = handle_retr(data_sockfd, user.username, pwd_code, dirs);
+                    }
+                }
+                free_path(dirs); //不要忘记释放内存!!!
+
+                if(ret == 0){ //打印成功
+                    if(cmds[1] == NULL){ //打印的是当前路径
+                        sprintf(info, "Successfully transferred \"%s\"", pwd);
+                    }
+                    else{ //打印的是指定路径
+                        sprintf(info, "Successfully transferred \"%s\"", cmds[1]);
+                    }
+                    server_send_reply(task, 226, info);
+                }else{ //打印失败
+                    server_send_reply(task, 550, "Directory not found.");
+                }
+                close(data_sockfd);
+                close(listen_sockfd);
+                data_sockfd = -1;
+                printf("close sock!\n");
+            }
+            else if(ftp_strcmp(cmds[0], "STOR") == 0){
+
+            }
+            else if(ftp_strcmp(cmds[0], "DELE") == 0){ //删除普通文件
+                if(sizeof_cmd(cmds) < 2){ //rm没带参数
+                    server_send_reply(task, 550, "Syntax error.");
+                }
+                else{
+                    dirs = split_path(cmds[1]);
+                    if(cmds[1][0] == '/'){ //绝对路径
+                        printf("绝对路径!\n");
+                        ret = handle_dele(user.username, ROOT_DIR_CODE, dirs);
+                    }
+                    else{ //相对路径
+                        if(strcmp(dirs[0], ".") == 0){
+                            printf("相对路径:'.'\n");
+                            ret = handle_dele(user.username, pwd_code, dirs+1);
+                        }
+                        else if(strcmp(dirs[0], "..") == 0){
+                            printf("相对路径:'..'\n");
+                            if(pwd_code == 0){ //根目录没有上一级目录
+                                ret = handle_dele(user.username, pwd_code, dirs+1);
+                            }
+                            else{ //从上一级目录开始
+                                db_get_file(pwd_code, &file);
+                                ret = handle_dele(user.username, file.precode, dirs+1);
+                            }
+                        }
+                        else{ //普通相对路径
+                            printf("普通相对路径\n");
+                            ret = handle_dele(user.username, pwd_code, dirs);
+                        }
+                    }
+                    free_path(dirs); //不要忘记释放内存!!!
+                }
+                if(ret == 0){ //删除成功
+                    server_send_reply(task, 250, "File deleted successfully!");
+                }
+                else if(ret == -1){ //文件不存在
+                    server_send_reply(task, 550, "File not found!");
+                }
             }
             else if(ftp_strcmp(cmds[0], "MKD") == 0){
                 if(sizeof_cmd(cmds) < 2){ //mkdir没带参数
                     server_send_reply(task, 550, "Syntax error.");
                 }
                 else{
-                    db_mkdir(pwd_code, cmds[1]);
+                    dirs = split_path(cmds[1]);
+                    if(cmds[1][0] == '/'){ //绝对路径
+                        printf("绝对路径!\n");
+                        ret = handle_mkd(user.username, ROOT_DIR_CODE, dirs);
+                    }
+                    else{ //相对路径
+                        if(strcmp(dirs[0], ".") == 0){
+                            printf("相对路径:'.'\n");
+                            ret = handle_mkd(user.username, pwd_code, dirs+1);
+                        }
+                        else if(strcmp(dirs[0], "..") == 0){
+                            printf("相对路径:'..'\n");
+                            if(pwd_code == 0){ //根目录没有上一级目录
+                                ret = handle_mkd(user.username, pwd_code, dirs+1);
+                            }
+                            else{ //从上一级目录开始
+                                db_get_file(pwd_code, &file);
+                                ret = handle_mkd(user.username, file.precode, dirs+1);
+                            }
+                        }
+                        else{ //普通相对路径
+                            printf("普通相对路径\n");
+                            ret = handle_mkd(user.username, pwd_code, dirs);
+                        }
+                    }
+                    free_path(dirs); //不要忘记释放内存!!!
+                }
+                if(ret == 0){ //创建目录成功
+                    sprintf(info, "\"%s/\" created successfully!", cmds[1]);
+                    server_send_reply(task, 257, info);
+                }
+                else if(ret == -1){ //中间目录不存在
+                    sprintf(info, "\"%s/\": No such file or directory!", cmds[1]);
+                    server_send_reply(task, 550, info);
+                }
+                else if(ret == -2){ //目标目录已存在
+                    sprintf(info, "\"%s/\": Directory already exists!", cmds[1]);
+                    server_send_reply(task, 551, info);
                 }
             }
-            else if(ftp_strcmp(cmds[0], "RMD") == 0){
-
-            }
-            else if(ftp_strcmp(cmds[0], "RETR") == 0){
-
+            else if(ftp_strcmp(cmds[0], "RMD") == 0){ //删除目录文件
+                if(sizeof_cmd(cmds) < 2){ //rmdir没带参数
+                    server_send_reply(task, 550, "Syntax error.");
+                }
+                else{
+                    dirs = split_path(cmds[1]);
+                    if(cmds[1][0] == '/'){ //绝对路径
+                        printf("绝对路径!\n");
+                        ret = handle_rmd(user.username, ROOT_DIR_CODE, dirs);
+                    }
+                    else{ //相对路径
+                        if(strcmp(dirs[0], ".") == 0){
+                            printf("相对路径:'.'\n");
+                            ret = handle_rmd(user.username, pwd_code, dirs+1);
+                        }
+                        else if(strcmp(dirs[0], "..") == 0){
+                            printf("相对路径:'..'\n");
+                            if(pwd_code == 0){ //根目录没有上一级目录
+                                ret = handle_rmd(user.username, pwd_code, dirs+1);
+                            }
+                            else{ //从上一级目录开始
+                                db_get_file(pwd_code, &file);
+                                ret = handle_rmd(user.username, file.precode, dirs+1);
+                            }
+                        }
+                        else{ //普通相对路径
+                            printf("普通相对路径\n");
+                            ret = handle_rmd(user.username, pwd_code, dirs);
+                        }
+                    }
+                    free_path(dirs); //不要忘记释放内存!!!
+                }
+                if(ret == 0){ //删除空目录成功
+                    server_send_reply(task, 250, "Directory deleted successfully!");
+                }
+                else if(ret == -1){ //目录不存在
+                    server_send_reply(task, 550, "Directory not found.");
+                }
+                else if(ret == -2){ //目录非空
+                    server_send_reply(task, 550, "Directory not empty.");
+                }
             }
             else if(ftp_strcmp(cmds[0], "QUIT") == 0){
                 server_send_reply(task, 221, "Goodbye!");
@@ -386,9 +810,11 @@ void ftp_server(elem_t *task){
             else if(ftp_strcmp(cmds[0], "PASV") == 0){
                 //被动模式,打开新端口进行数据传输
                 int data_port = get_data_port();
-                data_sockfd = Tcp_init(task->sin_addr, data_port); 
+                listen_sockfd = Tcp_init(task->sin_addr, data_port); 
                 sprintf(info, "Entering Passive Mode (%s,%d,%d)", str_replace(inet_ntoa(task->sin_addr), '.', ','), data_port/256, data_port%256);
                 server_send_reply(task, 227, info);
+                data_sockfd = Accept(listen_sockfd, NULL, NULL);
+                printf("use sock!\n");
             }
             else if(ftp_strcmp(cmds[0], "SYST") == 0){
                 server_send_reply(task, 215, "Linux ubuntu.");
