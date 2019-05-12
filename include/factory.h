@@ -4,6 +4,7 @@
 #include "queue.h"
 #include "conf.h"
 #include "user_info.h"
+#define MMAP_FILE_SIZE 31257280 //超过30MB使用mmap方法
 
 typedef struct{
     pthread_t *p_threads; //存储线程

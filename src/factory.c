@@ -356,7 +356,6 @@ int handle_dele(const char *username, int dir_code, char **dirs){
 
 void tran_list_info(int sockfd, p_file_info list_info){
     if(list_info == NULL){
-        close(sockfd);
         return;
     }
     p_file_info p_info = list_info;
@@ -372,7 +371,6 @@ void tran_list_info(int sockfd, p_file_info list_info){
     }
 
     free(list_info);
-    close(sockfd);
 }
 
 
@@ -396,17 +394,16 @@ int handle_list(int data_sockfd, const char *username, int dir_code, char **dirs
         while(*(p_dir+1) != NULL){ //判断所有中间目录是否都存在
             ret = db_find_dir(code, *p_dir);
             if(ret == -1){ //目录不存在
-                close(data_sockfd);
                 return -1;
             }
             code = ret; //进入下一级目录继续查找
             p_dir++;
         }
         //从倒数第二级目录获取目标文件信息
+        //无论是目录还是普通文件都行
         printf("code:%d, dir:%s\n", code, *p_dir);
         code = db_find_file(username, code, *p_dir);
         if(code == -1){ //不存在
-            close(data_sockfd);
             return -1;
         }
         else{
@@ -415,6 +412,171 @@ int handle_list(int data_sockfd, const char *username, int dir_code, char **dirs
     }
     tran_list_info(data_sockfd, list_info);
     return 0;
+}
+
+/* 将文件file通过sockfd发送给客户端 */
+int ftp_send_file(int sockfd, p_file_info file, off_t offset){ //offset为断点续传做准备
+    int fd = open(file->md5sum, O_RDONLY);
+    lseek(fd, offset, SEEK_SET);
+    if(fd == -1){
+        perror("ftp_send_file:open");
+        return -1;
+    }
+
+    //大文件使用mmap
+    if(file->st_size >= MMAP_FILE_SIZE){
+        //待实现
+    }
+    
+    int len = 0, ret = 0;
+    char buf[1024] = {0};
+    while((len = Read(fd, buf, sizeof(buf)))){
+        ret = Send(sockfd, buf, sizeof(buf), 0);
+        if(ret == -1){
+            return -1;
+        }
+    }
+    
+    return 0;
+}
+
+/********************************************************
+ *   功能: 从code为dir_code的目录开始, 发送dirs文件 
+ *     例: dirs: dir1/dir2/file 
+ *         要求dir1/dir2/file存在, 且file是普通文件
+ *         最后向客户端发送该文件
+ * 返回值: 0 -- 传输成功
+ *        -1 -- 失败:文件不存在
+ *        -2 -- 失败:传输失败
+ *********************************************************/
+int handle_retr(int data_sockfd, const char *username, int dir_code, char **dirs){
+    int ret = 0;
+    int code = dir_code;
+    char **p_dir = dirs;
+    file_info_t file;
+    if(dirs == NULL){
+        return -1; //文件不存在
+    }   
+    else{ //传输指定目录的文件
+        while(*(p_dir+1) != NULL){ //判断所有中间目录是否都存在
+            ret = db_find_dir(code, *p_dir);
+            if(ret == -1){ //目录不存在
+                return -1;
+            }
+            code = ret; //进入下一级目录继续查找
+            p_dir++;
+        }
+        //从倒数第二级目录获取目标文件信息
+        printf("code:%d, file:%s\n", code, *p_dir);
+        code = db_find_file(username, code, *p_dir);
+        if(code == -1){ //不存在
+            return -1;
+        }
+        else{ //判断是不是普通文件
+            ret = db_get_file(code, &file);
+            if(S_ISDIR(file.st_mode)){
+                return -1; //不传输目录
+            }
+        }
+    }
+
+    ret = ftp_send_file(data_sockfd, &file, 0);
+    if(ret == -1){
+        return -2; //传输出错
+    }
+    else{
+        return 0; //传输成功
+    }
+}
+
+/********************************************************
+ *   功能: 从code为dir_code的目录开始, 获取文件size 
+ *     例: dirs: dir1/dir2/file 
+ *         要求dir1/dir2/file存在, 且file是普通文件
+ *         最后返回该文件size
+ * 返回值: 文件size -- 传输成功
+ *               -1 -- 失败:文件不存在
+ *********************************************************/
+int handle_size(const char *username, int dir_code, char **dirs){
+    int ret = 0;
+    int code = dir_code;
+    char **p_dir = dirs;
+    file_info_t file;
+    if(dirs == NULL){
+        return -1; //文件不存在
+    }   
+    else{ //获取指定目录的文件
+        while(*(p_dir+1) != NULL){ //判断所有中间目录是否都存在
+            ret = db_find_dir(code, *p_dir);
+            if(ret == -1){ //目录不存在
+                return -1;
+            }
+            code = ret; //进入下一级目录继续查找
+            p_dir++;
+        }
+        //从倒数第二级目录获取目标文件信息
+        printf("code:%d, file:%s\n", code, *p_dir);
+        code = db_find_file(username, code, *p_dir);
+        if(code == -1){ //不存在
+            return -1;
+        }
+        else{ //判断是不是普通文件
+            ret = db_get_file(code, &file);
+            if(S_ISDIR(file.st_mode)){
+                return -1; //目录不设size
+            }
+            else{
+                return file.st_size; //返回文件size
+            }
+        }
+    }
+}
+
+
+/********************************************************
+ *   功能: 从code为dir_code的目录开始, 接收dirs文件 
+ *     例: dirs: dir1/dir2/file, 要求dir1/dir2/存在
+ *         若file已存在, 则覆盖之, 然后接收文件
+ * 返回值: 0 -- 传输成功
+ *        -1 -- 失败:文件路径不存在
+ *********************************************************/
+int handle_stor(int data_sockfd, const char *username, int dir_code, char **dirs){
+    int ret = 0;
+    int code = dir_code;
+    char **p_dir = dirs;
+    file_info_t file;
+    if(dirs == NULL){
+        return -1; //未指定文件名
+    }   
+    else{ //发送到指定目录
+        while(*(p_dir+1) != NULL){ //判断所有中间目录是否都存在
+            ret = db_find_dir(code, *p_dir);
+            if(ret == -1){ //目录不存在
+                return -1;
+            }
+            code = ret; //进入下一级目录继续查找
+            p_dir++;
+        }
+    }
+    //此时code为路径上的最后一级目录
+    int fd = open(*p_dir, O_RDWR|O_CREAT);
+
+    size_t size = 0, len = 0;
+    char buf[1024] = {0};
+    
+    while((len = Recv(data_sockfd, buf, sizeof(buf), 0))){
+        Write(fd, buf, len);
+        size += len;
+    }
+
+    file.precode = code;
+    file.st_size = size;
+    file.st_mode = ST_MODE_REG;
+    strcpy(file.filename, *p_dir);
+    strcpy(file.owner, username);
+    strcpy(file.md5sum, *p_dir);
+    db_create_file(username, code, &file);
+    return 0
 }
 
 
@@ -541,7 +703,7 @@ void ftp_server(elem_t *task){
                     continue;
                 }
                 else{
-                    sprintf(info, "150 Opening data channel for directory listing of \"%s\"", sizeof_cmd(cmds)>1?cmds[1]:pwd);
+                    sprintf(info, "Opening data channel for directory listing of \"%s\"", sizeof_cmd(cmds)>1?cmds[1]:pwd);
                     server_send_reply(task, 150, info);
                 }
 
@@ -605,7 +767,7 @@ void ftp_server(elem_t *task){
                     continue;
                 }
                 else{
-                    sprintf(info, "150 Opening data channel for file download from server of \"%s\"", sizeof_cmd(cmds)>1?cmds[1]:pwd);
+                    sprintf(info, "Opening data channel for file download from server of \"%s\"", sizeof_cmd(cmds)>1?cmds[1]:pwd);
                     server_send_reply(task, 150, info);
                 }
 
@@ -634,26 +796,115 @@ void ftp_server(elem_t *task){
                         ret = handle_retr(data_sockfd, user.username, pwd_code, dirs);
                     }
                 }
-                free_path(dirs); //不要忘记释放内存!!!
 
-                if(ret == 0){ //打印成功
-                    if(cmds[1] == NULL){ //打印的是当前路径
-                        sprintf(info, "Successfully transferred \"%s\"", pwd);
-                    }
-                    else{ //打印的是指定路径
-                        sprintf(info, "Successfully transferred \"%s\"", cmds[1]);
-                    }
+                if(ret == 0){ //发送文件成功
+                    sprintf(info, "Successfully transferred \"%s\"", cmds[1]);
                     server_send_reply(task, 226, info);
-                }else{ //打印失败
-                    server_send_reply(task, 550, "Directory not found.");
+                }else if(ret == -1){ //文件不存在
+                    server_send_reply(task, 550, "File not found.");
                 }
+                
+                free_path(dirs); //不要忘记释放内存!!!
                 close(data_sockfd);
                 close(listen_sockfd);
                 data_sockfd = -1;
                 printf("close sock!\n");
             }
             else if(ftp_strcmp(cmds[0], "STOR") == 0){
+                if(sizeof_cmd(cmds) == 1){ //put未带参数
+                    server_send_reply(task, 550, "Syntax error.");
+                    continue;
+                }
 
+                if(data_sockfd == -1){ //尚未建立数据连接
+                    server_send_reply(task, 503, "Bad sequence of commands.");
+                    continue;
+                }
+                else{
+                    sprintf(info, "Opening data channel for file upload to server of \"%s\"", cmds[1]);
+                    server_send_reply(task, 150, info);
+                }
+
+                dirs = split_path(cmds[1]);
+                if(cmds[1][0] == '/'){ //绝对路径
+                    printf("绝对路径!\n");
+                    ret = handle_stor(data_sockfd, user.username, ROOT_DIR_CODE, dirs);
+                }
+                else{ //相对路径
+                    if(strcmp(dirs[0], ".") == 0){
+                        printf("相对路径:'.'\n");
+                        ret = handle_stor(data_sockfd, user.username, pwd_code, dirs+1);
+                    }
+                    else if(strcmp(dirs[0], "..") == 0){
+                        printf("相对路径:'..'\n");
+                        if(pwd_code == 0){ //根目录没有上一级目录
+                            ret = handle_stor(data_sockfd, user.username, pwd_code, dirs+1);
+                        }
+                        else{ //从上一级目录开始
+                            db_get_file(pwd_code, &file);
+                            ret = handle_stor(data_sockfd, user.username, file.precode, dirs+1);
+                        }
+                    }
+                    else{ //普通相对路径
+                        printf("普通相对路径\n");
+                        ret = handle_stor(data_sockfd, user.username, pwd_code, dirs);
+                    }
+                }
+
+                if(ret == 0){ //接收文件成功
+                    sprintf(info, "Successfully transferred \"%s\"", cmds[1]);
+                    server_send_reply(task, 226, info);
+                }else if(ret == -1){ //文件路径不存在
+                    server_send_reply(task, 550, "Filename invalid.");
+                }
+                
+                free_path(dirs); //不要忘记释放内存!!!
+                close(data_sockfd);
+                close(listen_sockfd);
+                data_sockfd = -1;
+                printf("close sock!\n");
+            }
+            else if(ftp_strcmp(cmds[0], "SIZE") == 0){
+                if(sizeof_cmd(cmds) == 1){ //SIZE未带参数
+                    server_send_reply(task, 550, "Syntax error.");
+                    continue;
+                }
+
+                dirs = split_path(cmds[1]);
+                if(cmds[1][0] == '/'){ //绝对路径
+                    printf("绝对路径!\n");
+                    ret = handle_size(user.username, ROOT_DIR_CODE, dirs);
+                }
+                else{ //相对路径
+                    if(strcmp(dirs[0], ".") == 0){
+                        printf("相对路径:'.'\n");
+                        ret = handle_size(user.username, pwd_code, dirs+1);
+                    }
+                    else if(strcmp(dirs[0], "..") == 0){
+                        printf("相对路径:'..'\n");
+                        if(pwd_code == 0){ //根目录没有上一级目录
+                            ret = handle_size(user.username, pwd_code, dirs+1);
+                        }
+                        else{ //从上一级目录开始
+                            db_get_file(pwd_code, &file);
+                            ret = handle_size(user.username, file.precode, dirs+1);
+                        }
+                    }
+                    else{ //普通相对路径
+                        printf("普通相对路径\n");
+                        ret = handle_size(user.username, pwd_code, dirs);
+                    }
+                }
+
+                if(ret != -1){ //获取文件大小成功
+                    sprintf(info, "%d", ret);
+                    server_send_reply(task, 213, info);
+                }
+                else{ //文件不存在
+                    server_send_reply(task, 550, "File not found.");
+                }
+                
+                free_path(dirs); //不要忘记释放内存!!!
             }
             else if(ftp_strcmp(cmds[0], "DELE") == 0){ //删除普通文件
                 if(sizeof_cmd(cmds) < 2){ //rm没带参数
@@ -802,6 +1053,10 @@ void ftp_server(elem_t *task){
                 else if(ftp_strcmp(cmds[1], "B") == 0){ //Binary模式传输
                     //trans_mode = BINARY_MODE;
                     server_send_reply(task, 200, "Type set to B.");
+                }
+                else if(ftp_strcmp(cmds[1], "I") == 0){ //Binary模式传输
+                    //trans_mode = BINARY_MODE;
+                    server_send_reply(task, 200, "Type set to I.");
                 }
                 else{ //不支持的传输类型
                     server_send_reply(task, 504, "Command not implemented for that parameter");

@@ -307,6 +307,56 @@ int db_create_dir(const char *username, int dir_code, const char *dir_name){
 }
 
 
+/*****************************************************
+ *   功能: 在code等于dir_code的目录下创建文件file
+ * 返回值: 0 -- 创建文件成功
+ *        -1 -- 失败: 目标目录已存在
+ *        -2 -- 失败: 编号为code的文件不是目录
+ *        -3 -- 失败: 数据库处理失败
+ *****************************************************/
+int db_create_file(const char *username, int dir_code, p_file_infofile file){
+    MYSQL *conn;
+    file_info_t file;
+    int ret;
+
+    //检查code对应的文件是不是目录
+    if(dir_code == 0){
+        //是根目录
+        file.st_mode = ST_MODE_DIR;
+    }
+    else{
+        //非根目录,查找数据库验证
+        db_get_file(dir_code, &file);
+    }
+    if(!S_ISDIR(file.st_mode)){
+        return -2; //编号为code的文件不是目录
+    }
+
+    //检查目标目录是否已存在
+    ret = db_find_dir(dir_code, dir_name);
+    if(ret != -1){
+        return -1; //目标目录已存在
+    }
+
+    //创建新目录
+    connect_to_database(&conn); //连接到数据库
+
+    char query[512];
+    sprintf(query, "insert into file_tbl(precode, filename, st_mode, st_size, owner) values(%d, '%s', %d, %d, '%s')", dir_code, dir_name, ST_MODE_DIR, 0, username);
+    ret = mysql_query(conn, query);
+    if(ret){
+        printf("Error makeing query:%s\n", mysql_error(conn));
+        return -3;
+    }
+    else{
+        printf("insert success!\n");
+    }
+    mysql_close(conn);
+    return 0;
+}
+
+
+
 /***********************************************
  *   功能: 判断dir_code对应的目录是不是空目录
  * 返回值: 1 -- 是空目录
